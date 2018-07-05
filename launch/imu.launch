@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="ellipseimu_ros" type="ellipseimu_ros" name="imu" output="screen">
+    </node>
+</launch>

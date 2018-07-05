@@ -20,7 +20,7 @@ catkin_package(
 )
 
 add_executable(ellipseimu_ros 
-  src/ellipseMinimal.c
+  src/main.cpp
 )
 include_directories(
   ${catkin_INCLUDE_DIRS}
