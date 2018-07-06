@@ -115,7 +115,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		break;
 	case SBG_ECOM_LOG_PRESSURE:
 		_alt_msg.header.stamp = ros_data_time;
-		_alt_msg.fluid_pressure = pLogData->pressureData.height;
+		_alt_msg.fluid_pressure = pLogData->pressureData.pressure;
 		_alt_pub.publish(_alt_msg);
 		break;
 	case SBG_ECOM_LOG_STATUS:
@@ -210,6 +210,11 @@ int main(int argc, char** argv)
 			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_STATUS, SBG_ECOM_OUTPUT_MODE_PPS) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_STATUS.\n");
+			}
+
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_PRESSURE, SBG_ECOM_OUTPUT_MODE_PPS) != SBG_NO_ERROR)
+			{
+				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_PRESSURE.\n");
 			}
 
 			// Disable a few outputs
