@@ -27,6 +27,8 @@ sensor_msgs::FluidPressure _alt_msg;
 ros::Time _ros_time_first_frame;
 uint32 _imu_time_first_frame;
 
+bool _use_sculling_coning_results;
+
 //----------------------------------------------------------------------//
 //  Call backs                                                          //
 //----------------------------------------------------------------------//
@@ -155,20 +157,26 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	case SBG_ECOM_LOG_IMU_DATA:
 		_imu_msg.header.stamp = ros_data_time;
 		last_imu = ros_data_time;
-		// _imu_msg.linear_acceleration.x = pLogData->imuData.accelerometers[0];
-		// _imu_msg.linear_acceleration.y = pLogData->imuData.accelerometers[1];
-		// _imu_msg.linear_acceleration.z = pLogData->imuData.accelerometers[2];
-		// _imu_msg.angular_velocity.x = pLogData->imuData.gyroscopes[0];
-		// _imu_msg.angular_velocity.y = pLogData->imuData.gyroscopes[1]; 
-		// _imu_msg.angular_velocity.z = pLogData->imuData.gyroscopes[2]; 
 
-		// use coning and sculling output, more accuracy?
-		_imu_msg.linear_acceleration.x = pLogData->imuData.deltaVelocity[0];
-		_imu_msg.linear_acceleration.y = pLogData->imuData.deltaVelocity[1];
-		_imu_msg.linear_acceleration.z = pLogData->imuData.deltaVelocity[2];
-		_imu_msg.angular_velocity.x = pLogData->imuData.deltaAngle[0];
-		_imu_msg.angular_velocity.y = pLogData->imuData.deltaAngle[1];
-		_imu_msg.angular_velocity.z = pLogData->imuData.deltaAngle[2];
+		if (_use_sculling_coning_results)
+		{
+			_imu_msg.header.frame_id = "sculling_coning";
+			_imu_msg.linear_acceleration.x = pLogData->imuData.deltaVelocity[0];
+			_imu_msg.linear_acceleration.y = pLogData->imuData.deltaVelocity[1];
+			_imu_msg.linear_acceleration.z = pLogData->imuData.deltaVelocity[2];
+			_imu_msg.angular_velocity.x = pLogData->imuData.deltaAngle[0];
+			_imu_msg.angular_velocity.y = pLogData->imuData.deltaAngle[1];
+			_imu_msg.angular_velocity.z = pLogData->imuData.deltaAngle[2];
+		}else{
+			_imu_msg.header.frame_id = "filtered";
+			_imu_msg.linear_acceleration.x = pLogData->imuData.accelerometers[0];
+			_imu_msg.linear_acceleration.y = pLogData->imuData.accelerometers[1];
+			_imu_msg.linear_acceleration.z = pLogData->imuData.accelerometers[2];
+			_imu_msg.angular_velocity.x = pLogData->imuData.gyroscopes[0];
+			_imu_msg.angular_velocity.y = pLogData->imuData.gyroscopes[1]; 
+			_imu_msg.angular_velocity.z = pLogData->imuData.gyroscopes[2]; 
+		}
+		
 		checkImuStatus(pLogData->imuData.status);
 
 		if (last_imu == last_quat)
@@ -230,6 +238,9 @@ int main(int argc, char** argv)
 
 	ros::init(argc, argv, "ellipseimu_ros");
 	ros::NodeHandle nh("~");
+
+	nh.param("use_sculling_coning_results", _use_sculling_coning_results, false);
+	ROS_WARN_STREAM("Use Sculling & Coning Results: " << (_use_sculling_coning_results ? "True" : "False") );
 
 	_imu_pub = nh.advertise<sensor_msgs::Imu>("imu0",5);
 	_mag_pub = nh.advertise<sensor_msgs::MagneticField>("mag0",5);

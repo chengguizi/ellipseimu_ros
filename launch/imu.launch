@@ -1,4 +1,5 @@
 <launch>
     <node pkg="ellipseimu_ros" type="ellipseimu_ros" name="imu" output="screen">
+        <param name="use_sculling_coning_results" type="bool" value="false" />
     </node>
 </launch>
