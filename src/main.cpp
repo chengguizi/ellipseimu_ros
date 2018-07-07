@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cassert>
+#include <bitset>
 
 #include <ros/ros.h>
 
@@ -38,6 +39,54 @@ uint32 _imu_time_first_frame;
  *	\param[in]	pUserArg								Optional user supplied argument.
  *	\return												SBG_NO_ERROR if the received log has been used successfully.
  */
+
+void checkGeneralStatus(uint16 generalStatus)
+{
+	if ( generalStatus ^ (
+		SBG_ECOM_GENERAL_MAIN_POWER_OK |
+		SBG_ECOM_GENERAL_IMU_POWER_OK |
+		SBG_ECOM_GENERAL_GPS_POWER_OK |
+		SBG_ECOM_GENERAL_SETTINGS_OK |
+		SBG_ECOM_GENERAL_TEMPERATURE_OK |
+		SBG_ECOM_GENERAL_DATALOGGER_OK )
+	)
+		std::cerr << "ERROR: General Status: " << std::bitset<16>(generalStatus) << std::endl;
+	else
+		std::cout << ", General [OK]";
+}
+
+void checkComStatus(uint16 comStatus)
+{
+	if ( (comStatus & SBG_ECOM_PORTA_VALID) && (comStatus & SBG_ECOM_PORTA_RX_OK) && (comStatus & SBG_ECOM_PORTA_TX_OK)
+	)
+		std::cout << ", Comm [OK]";
+	else
+		std::cerr << "ERROR: Comm Status: " << std::bitset<16>(comStatus) << std::endl;
+}
+
+void checkImuStatus(uint16 imuStatus)
+{
+	if ( imuStatus ^ (
+		SBG_ECOM_IMU_COM_OK |
+		SBG_ECOM_IMU_STATUS_BIT |
+		SBG_ECOM_IMU_ACCEL_X_BIT |
+		SBG_ECOM_IMU_ACCEL_Y_BIT |
+		SBG_ECOM_IMU_ACCEL_Z_BIT |
+		SBG_ECOM_IMU_GYRO_X_BIT | 
+		SBG_ECOM_IMU_GYRO_Y_BIT |
+		SBG_ECOM_IMU_GYRO_Z_BIT |
+		SBG_ECOM_IMU_ACCELS_IN_RANGE |
+		SBG_ECOM_IMU_GYROS_IN_RANGE )
+	)
+		std::cerr << "ERROR: IMU Status: " << std::bitset<16>(imuStatus) << std::endl;
+}
+
+void checkEkfQuatData(uint32 ekfStatus)
+{
+	if ( ekfStatus )
+		std::cout << " EKF Status: "<< std::bitset<32>(ekfStatus) << std::endl;
+}
+
 SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const SbgBinaryLogData *pLogData, void *pUserArg)
 {
 	//
@@ -57,6 +106,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	{
 	case SBG_ECOM_LOG_STATUS:
 		timestamp_ring = pLogData->statusData.timeStamp;
+		break;
 	case SBG_ECOM_LOG_IMU_DATA:	
 		timestamp_ring = pLogData->imuData.timeStamp;
 		break;
@@ -66,19 +116,22 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	case SBG_ECOM_LOG_PRESSURE:
 		timestamp_ring = pLogData->pressureData.timeStamp;
 		break;
+	case SBG_ECOM_LOG_EKF_QUAT:
+		timestamp_ring = pLogData->ekfQuatData.timeStamp;
+		break;
 	default:
 		printf("FAIL TO GET TIMESTAMP:%d\n" , logCmd);
 		break;
 	}
 
-	if (_ros_time_first_frame == ros::Time(0)) // this is the first time reiceving data, set ros time reference here
+	if (_imu_time_first_frame == 0) // this is the first time reiceving data, set ros time reference here
 	{
 		_ros_time_first_frame = ros::Time::now();
 		_imu_time_first_frame = timestamp_ring;
 		assert(prev_timestamp == 0); // make sure this is the first ever frame
 	}
 
-	if (prev_timestamp > timestamp_ring + 1e10)
+	if (prev_timestamp > timestamp_ring + 1e9) // detect ring back to around zero
 	{
 		printf("timestamp: CARRY 1 bit at bit 32\n");
 		printf("%d %d\n",prev_timestamp,timestamp_ring);
@@ -88,23 +141,38 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 
 	// getting the data timestamp in imu system
 	unsigned long long imu_time = (unsigned long long)carry32*((unsigned long long)1<<32) + (unsigned long long)timestamp_ring;
-	unsigned long long imu_time_duration = imu_time - _imu_time_first_frame;
+	unsigned long long imu_time_duration = imu_time - (unsigned long long)_imu_time_first_frame;
 	// getting the data timestamp in ros system
-	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000,imu_time_duration%1000000*1000);
+	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000, (imu_time_duration%1000000)*1000);
 	
-	//printf("timestamp_ring: %d imu_time: %llu\n",timestamp_ring,imu_time);
+	ROS_INFO_STREAM_THROTTLE(2, "sec: " << imu_time_duration/1000000 << "nsec: " << (imu_time_duration%1000000)*1000);
 
+	//printf("timestamp_ring: %d imu_time: %llu\n",timestamp_ring,imu_time);
+	static ros::Time last_imu = ros::Time(0);
+	static ros::Time last_quat = ros::Time(0);
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
 		_imu_msg.header.stamp = ros_data_time;
-		_imu_msg.linear_acceleration.x = pLogData->imuData.accelerometers[0];
-		_imu_msg.linear_acceleration.y = pLogData->imuData.accelerometers[1];
-		_imu_msg.linear_acceleration.z = pLogData->imuData.accelerometers[2];
-		_imu_msg.angular_velocity.x = pLogData->imuData.gyroscopes[0];
-		_imu_msg.angular_velocity.y = pLogData->imuData.gyroscopes[1]; 
-		_imu_msg.angular_velocity.z = pLogData->imuData.gyroscopes[2]; 
-		_imu_pub.publish(_imu_msg);
+		last_imu = ros_data_time;
+		// _imu_msg.linear_acceleration.x = pLogData->imuData.accelerometers[0];
+		// _imu_msg.linear_acceleration.y = pLogData->imuData.accelerometers[1];
+		// _imu_msg.linear_acceleration.z = pLogData->imuData.accelerometers[2];
+		// _imu_msg.angular_velocity.x = pLogData->imuData.gyroscopes[0];
+		// _imu_msg.angular_velocity.y = pLogData->imuData.gyroscopes[1]; 
+		// _imu_msg.angular_velocity.z = pLogData->imuData.gyroscopes[2]; 
+
+		// use coning and sculling output, more accuracy?
+		_imu_msg.linear_acceleration.x = pLogData->imuData.deltaVelocity[0];
+		_imu_msg.linear_acceleration.y = pLogData->imuData.deltaVelocity[1];
+		_imu_msg.linear_acceleration.z = pLogData->imuData.deltaVelocity[2];
+		_imu_msg.angular_velocity.x = pLogData->imuData.deltaAngle[0];
+		_imu_msg.angular_velocity.y = pLogData->imuData.deltaAngle[1];
+		_imu_msg.angular_velocity.z = pLogData->imuData.deltaAngle[2];
+		checkImuStatus(pLogData->imuData.status);
+
+		if (last_imu == last_quat)
+			_imu_pub.publish(_imu_msg);
 		break;
 	case SBG_ECOM_LOG_MAG:
 		_mag_msg.header.stamp = ros_data_time;
@@ -113,13 +181,26 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		_mag_msg.magnetic_field.z = pLogData->magData.magnetometers[2];
 		_mag_pub.publish(_mag_msg);
 		break;
+	case SBG_ECOM_LOG_EKF_QUAT:
+		last_quat = ros_data_time;
+		_imu_msg.orientation.w = pLogData->ekfQuatData.quaternion[0];
+		_imu_msg.orientation.x = pLogData->ekfQuatData.quaternion[1];
+		_imu_msg.orientation.y = pLogData->ekfQuatData.quaternion[2];
+		_imu_msg.orientation.z = pLogData->ekfQuatData.quaternion[3];
+		checkEkfQuatData(pLogData->ekfQuatData.status);
+		if (last_imu == last_quat)
+			_imu_pub.publish(_imu_msg);
+		break;
 	case SBG_ECOM_LOG_PRESSURE:
 		_alt_msg.header.stamp = ros_data_time;
 		_alt_msg.fluid_pressure = pLogData->pressureData.pressure;
 		_alt_pub.publish(_alt_msg);
 		break;
 	case SBG_ECOM_LOG_STATUS:
-		printf("PPS Status Received: %u\n", pLogData->statusData.timeStamp);
+		printf("PPS Status Received: %u ", pLogData->statusData.timeStamp);
+		checkGeneralStatus(pLogData->statusData.generalStatus);
+		checkComStatus(pLogData->statusData.comStatus);
+		std::cout << std::endl;
 		break;
 	default:
 		printf("data type:%d\n" , logCmd);
@@ -154,6 +235,7 @@ int main(int argc, char** argv)
 	_mag_pub = nh.advertise<sensor_msgs::MagneticField>("mag0",5);
 	_alt_pub = nh.advertise<sensor_msgs::FluidPressure>("alt0",5);
 	_ros_time_first_frame = ros::Time(0);
+	_imu_time_first_frame = 0;
 	//
 	// Create an interface: 
 	// We can choose either a serial for real time operation, or file for previously logged data parsing
@@ -197,31 +279,38 @@ int main(int argc, char** argv)
 			//
 			// Configure some output logs to 25 Hz
 			//
+
+			// IMU
 			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_IMU_DATA, SBG_ECOM_OUTPUT_MODE_MAIN_LOOP) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_IMU_DATA.\n");
 			}
 
+			// MAGNETOMETER
 			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_MAG, SBG_ECOM_OUTPUT_MODE_MAIN_LOOP) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_MAG.\n");
 			}
 
+			//EKF QUATERNION
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_EKF_QUAT, SBG_ECOM_OUTPUT_MODE_MAIN_LOOP) != SBG_NO_ERROR)
+			{
+				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_EKF_QUAT.\n");
+			}
+
+			// GENERAL STATUS
 			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_STATUS, SBG_ECOM_OUTPUT_MODE_PPS) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_STATUS.\n");
 			}
 
+			// ALTITUDE
 			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_PRESSURE, SBG_ECOM_OUTPUT_MODE_PPS) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_PRESSURE.\n");
 			}
 
 			// Disable a few outputs
-			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_EKF_QUAT, SBG_ECOM_OUTPUT_MODE_DISABLED) != SBG_NO_ERROR)
-			{
-				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_EKF_QUAT.\n");
-			}
 			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_EKF_EULER, SBG_ECOM_OUTPUT_MODE_DISABLED) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_EKF_EULER.\n");
