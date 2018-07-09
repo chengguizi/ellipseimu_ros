@@ -66,7 +66,7 @@ void checkComStatus(uint16 comStatus)
 		std::cerr << "ERROR: Comm Status: " << std::bitset<16>(comStatus) << std::endl;
 }
 
-void checkImuStatus(uint16 imuStatus)
+bool checkImuStatus(uint16 imuStatus)
 {
 	if ( imuStatus ^ (
 		SBG_ECOM_IMU_COM_OK |
@@ -80,7 +80,12 @@ void checkImuStatus(uint16 imuStatus)
 		SBG_ECOM_IMU_ACCELS_IN_RANGE |
 		SBG_ECOM_IMU_GYROS_IN_RANGE )
 	)
-		std::cerr << "ERROR: IMU Status: " << std::bitset<16>(imuStatus) << std::endl;
+	{
+		ROS_WARN_STREAM_THROTTLE(0.25, "ERROR: IMU Status: " << std::bitset<16>(imuStatus) );
+		return false;
+	}
+
+	return true;
 }
 
 void checkEkfQuatData(uint32 ekfStatus)
@@ -155,6 +160,9 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
+
+		if (!checkImuStatus(pLogData->imuData.status))
+			return SBG_NO_ERROR;
 		_imu_msg.header.stamp = ros_data_time;
 		last_imu = ros_data_time;
 
@@ -176,13 +184,12 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 			_imu_msg.angular_velocity.y = pLogData->imuData.gyroscopes[1]; 
 			_imu_msg.angular_velocity.z = pLogData->imuData.gyroscopes[2]; 
 		}
-		
-		checkImuStatus(pLogData->imuData.status);
 
 		if (last_imu == last_quat)
 			_imu_pub.publish(_imu_msg);
 		break;
 	case SBG_ECOM_LOG_MAG:
+		// checkMagStatus(pLogData->magData.status)
 		_mag_msg.header.stamp = ros_data_time;
 		_mag_msg.magnetic_field.x = pLogData->magData.magnetometers[0];
 		_mag_msg.magnetic_field.y = pLogData->magData.magnetometers[1];
