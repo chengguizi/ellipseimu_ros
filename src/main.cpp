@@ -131,11 +131,12 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		break;
 	}
 
-	if (_imu_time_first_frame == 0) // this is the first time reiceving data, set ros time reference here
+	if (logCmd == SBG_ECOM_LOG_IMU_DATA && _imu_time_first_frame == 0) // this is the first time reiceving data, set ros time reference here
 	{
-		_ros_time_first_frame = ros::Time::now();
+		printf("============FIRST IMU FRAME RECEIVED!================\n");
+
+		_ros_time_first_frame.fromSec(ros::WallTime::now().toSec());
 		_imu_time_first_frame = timestamp_ring;
-		assert(prev_timestamp == 0); // make sure this is the first ever frame
 	}
 
 	if (prev_timestamp > timestamp_ring + 1e9) // detect ring back to around zero
@@ -197,6 +198,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		_mag_pub.publish(_mag_msg);
 		break;
 	case SBG_ECOM_LOG_EKF_QUAT:
+		_imu_msg.header.stamp = ros_data_time;
 		last_quat = ros_data_time;
 		_imu_msg.orientation.w = pLogData->ekfQuatData.quaternion[0];
 		_imu_msg.orientation.x = pLogData->ekfQuatData.quaternion[1];
