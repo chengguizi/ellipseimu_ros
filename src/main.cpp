@@ -139,6 +139,9 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		_imu_time_first_frame = timestamp_ring;
 	}
 
+	if (_imu_time_first_frame == 0)
+		return SBG_NO_ERROR;
+
 	if (prev_timestamp > timestamp_ring + 1e9) // detect ring back to around zero
 	{
 		printf("timestamp: CARRY 1 bit at bit 32\n");
@@ -153,7 +156,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	// getting the data timestamp in ros system
 	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000, (imu_time_duration%1000000)*1000);
 	
-	ROS_INFO_STREAM_THROTTLE(2, "sec: " << imu_time_duration/1000000 << "nsec: " << (imu_time_duration%1000000)*1000);
+	ROS_INFO_STREAM_THROTTLE(2, "IMU Time: " << imu_time_duration/1000000 + (imu_time_duration%1000000)*1000.0/1e9  << " sec");
 
 	//printf("timestamp_ring: %d imu_time: %llu\n",timestamp_ring,imu_time);
 	static ros::Time last_imu = ros::Time(0);
@@ -246,7 +249,8 @@ int main(int argc, char** argv)
 	SbgEComDeviceInfo		deviceInfo;
 
 	ros::init(argc, argv, "ellipseimu_ros");
-	ros::NodeHandle nh("~");
+	ros::NodeHandle nh;
+    ros::NodeHandle local_nh("~");
 
 	nh.param("use_sculling_coning_results", _use_sculling_coning_results, false);
 	ROS_WARN_STREAM("Use Sculling & Coning Results: " << (_use_sculling_coning_results ? "True" : "False") );
@@ -260,8 +264,10 @@ int main(int argc, char** argv)
 	// Create an interface: 
 	// We can choose either a serial for real time operation, or file for previously logged data parsing
 	// Note interface closing is also differentiated !
-	//
-	errorCode = sbgInterfaceSerialCreate(&sbgInterface, "/dev/ttyUSB0", 921600);		// Example for Unix using a FTDI Usb2Uart converter
+	
+	std::string tty_port;
+	ROS_ASSERT(local_nh.getParam("tty_port", tty_port));
+	errorCode = sbgInterfaceSerialCreate(&sbgInterface, tty_port.c_str(), 921600);		// Example for Unix using a FTDI Usb2Uart converter
 	//errorCode = sbgInterfaceSerialCreate(&sbgInterface, "COM20", 115200);								// Example for Windows serial communication
 
 	//
