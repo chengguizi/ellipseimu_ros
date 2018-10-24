@@ -1,6 +1,7 @@
 <launch>
     <node pkg="ellipseimu_ros" type="ellipseimu_ros" name="imu" output="screen">
         <param name="tty_port" type="str" value="/dev/ttyUSB0" />
-        <param name="use_sculling_coning_results" type="bool" value="false" />
+        <param name="imu_hz" type="int" value="100" />
+        <param name="use_sculling_coning_results" type="bool" value="true" />
     </node>
 </launch>

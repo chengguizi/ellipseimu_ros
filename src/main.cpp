@@ -42,7 +42,7 @@ bool _use_sculling_coning_results;
  *	\return												SBG_NO_ERROR if the received log has been used successfully.
  */
 
-void checkGeneralStatus(uint16 generalStatus)
+bool checkGeneralStatus(uint16 generalStatus)
 {
 	if ( generalStatus ^ (
 		SBG_ECOM_GENERAL_MAIN_POWER_OK |
@@ -54,16 +54,20 @@ void checkGeneralStatus(uint16 generalStatus)
 	)
 		std::cerr << "ERROR: General Status: " << std::bitset<16>(generalStatus) << std::endl;
 	else
-		std::cout << ", General [OK]";
+		return true;
+	
+	return false;
 }
 
-void checkComStatus(uint16 comStatus)
+bool checkComStatus(uint16 comStatus)
 {
 	if ( (comStatus & SBG_ECOM_PORTA_VALID) && (comStatus & SBG_ECOM_PORTA_RX_OK) && (comStatus & SBG_ECOM_PORTA_TX_OK)
 	)
-		std::cout << ", Comm [OK]";
+		return true;
 	else
 		std::cerr << "ERROR: Comm Status: " << std::bitset<16>(comStatus) << std::endl;
+
+	return false;
 }
 
 bool checkImuStatus(uint16 imuStatus)
@@ -156,7 +160,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	// getting the data timestamp in ros system
 	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000, (imu_time_duration%1000000)*1000);
 	
-	ROS_INFO_STREAM_THROTTLE(2, "IMU Time: " << imu_time_duration/1000000 + (imu_time_duration%1000000)*1000.0/1e9  << " sec");
+	ROS_INFO_STREAM_THROTTLE(5, "IMU Time: " << imu_time_duration/1000000 + (imu_time_duration%1000000)*1000.0/1e9  << " sec");
 
 	//printf("timestamp_ring: %d imu_time: %llu\n",timestamp_ring,imu_time);
 	static ros::Time last_imu = ros::Time(0);
@@ -217,10 +221,11 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		_alt_pub.publish(_alt_msg);
 		break;
 	case SBG_ECOM_LOG_STATUS:
-		printf("PPS Status Received: %u ", pLogData->statusData.timeStamp);
-		checkGeneralStatus(pLogData->statusData.generalStatus);
-		checkComStatus(pLogData->statusData.comStatus);
-		std::cout << std::endl;
+		// printf("PPS Status Received: %u ", pLogData->statusData.timeStamp);
+		;
+		// std::cout << std::endl;
+		if ( checkGeneralStatus(pLogData->statusData.generalStatus) && checkComStatus(pLogData->statusData.comStatus) )
+			ROS_INFO_THROTTLE(10, "IMU Communication [OK]");
 		break;
 	default:
 		printf("data type:%d\n" , logCmd);
@@ -252,7 +257,7 @@ int main(int argc, char** argv)
 	ros::NodeHandle nh;
     ros::NodeHandle local_nh("~");
 
-	nh.param("use_sculling_coning_results", _use_sculling_coning_results, false);
+	local_nh.param("use_sculling_coning_results", _use_sculling_coning_results, false);
 	ROS_WARN_STREAM("Use Sculling & Coning Results: " << (_use_sculling_coning_results ? "True" : "False") );
 
 	_imu_pub = nh.advertise<sensor_msgs::Imu>("imu0",5);
@@ -268,7 +273,20 @@ int main(int argc, char** argv)
 	std::string tty_port;
 	ROS_ASSERT(local_nh.getParam("tty_port", tty_port));
 	errorCode = sbgInterfaceSerialCreate(&sbgInterface, tty_port.c_str(), 921600);		// Example for Unix using a FTDI Usb2Uart converter
-	//errorCode = sbgInterfaceSerialCreate(&sbgInterface, "COM20", 115200);								// Example for Windows serial communication
+	//errorCode = sbgInterfaceSerialCreate(&sbgInterface, "COM20", 115200);						// Example for Windows serial communication
+
+	int imu_hz;
+	_SbgEComOutputMode IMU_HZ;
+	ROS_ASSERT(local_nh.getParam("imu_hz", imu_hz));
+	if (imu_hz == 200){
+		std::cout << "IMU configured to run at 200Hz." << std::endl;
+		IMU_HZ = SBG_ECOM_OUTPUT_MODE_MAIN_LOOP;
+	}else{
+		std::cout << "IMU configured to run at 100Hz." << std::endl;
+		IMU_HZ = SBG_ECOM_OUTPUT_MODE_DIV_2;
+	}
+
+	std::cout << "Sbg IMU uses NED convention - North-East-Down" << std::endl;
 
 	//
 	// Test that the interface has been created
@@ -308,19 +326,19 @@ int main(int argc, char** argv)
 			
 			// choice of SBG_ECOM_OUTPUT_MODE_DIV_2 or SBG_ECOM_OUTPUT_MODE_MAIN_LOOP
 			// IMU
-			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_IMU_DATA, SBG_ECOM_OUTPUT_MODE_DIV_2) != SBG_NO_ERROR)
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_IMU_DATA, IMU_HZ) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_IMU_DATA.\n");
 			}
 
 			// MAGNETOMETER
-			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_MAG, SBG_ECOM_OUTPUT_MODE_DIV_2) != SBG_NO_ERROR)
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_MAG, IMU_HZ) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_MAG.\n");
 			}
 
 			//EKF QUATERNION
-			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_EKF_QUAT, SBG_ECOM_OUTPUT_MODE_DIV_2) != SBG_NO_ERROR)
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_EKF_QUAT, IMU_HZ) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_EKF_QUAT.\n");
 			}
