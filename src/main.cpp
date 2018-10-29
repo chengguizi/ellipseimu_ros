@@ -260,9 +260,9 @@ int main(int argc, char** argv)
 	local_nh.param("use_sculling_coning_results", _use_sculling_coning_results, false);
 	ROS_WARN_STREAM("Use Sculling & Coning Results: " << (_use_sculling_coning_results ? "True" : "False") );
 
-	_imu_pub = nh.advertise<sensor_msgs::Imu>("imu0",5);
-	_mag_pub = nh.advertise<sensor_msgs::MagneticField>("mag0",5);
-	_alt_pub = nh.advertise<sensor_msgs::FluidPressure>("alt0",5);
+	_imu_pub = nh.advertise<sensor_msgs::Imu>("imu0",100);
+	_mag_pub = nh.advertise<sensor_msgs::MagneticField>("mag0",100);
+	_alt_pub = nh.advertise<sensor_msgs::FluidPressure>("alt0",100);
 	_ros_time_first_frame = ros::Time(0);
 	_imu_time_first_frame = 0;
 	//
@@ -344,7 +344,7 @@ int main(int argc, char** argv)
 			}
 
 			// GENERAL STATUS
-			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_STATUS, SBG_ECOM_OUTPUT_MODE_PPS) != SBG_NO_ERROR)
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_STATUS, SBG_ECOM_OUTPUT_MODE_DIV_10) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_STATUS.\n");
 			}
