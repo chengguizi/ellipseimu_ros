@@ -98,8 +98,11 @@ void checkEkfQuatData(uint32 ekfStatus)
 		std::cout << " EKF Status: "<< std::bitset<32>(ekfStatus) << std::endl;
 }
 
+long long received_ = 0;
+
 SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const SbgBinaryLogData *pLogData, void *pUserArg)
 {
+	received_++;
 	//
 	// Handle separately each received data according to the log ID
 	//
@@ -288,6 +291,9 @@ int main(int argc, char** argv)
 
 	std::cout << "Sbg IMU uses NED convention - North-East-Down" << std::endl;
 
+
+	bool error_exit = false;
+
 	//
 	// Test that the interface has been created
 	//
@@ -384,8 +390,18 @@ int main(int argc, char** argv)
 			// Loop until the user exist
 			//
 			printf("ros spinning\n");
+
+			long long last_received_ = 0;
+			int no_activity = 0;
 			while (ros::ok())
 			{
+				if (last_received_ != received_){
+					last_received_= received_;
+					no_activity = 0;
+				}else{
+					no_activity++;
+				}
+
 				//
 				// Try to read a frame
 				//
@@ -399,6 +415,11 @@ int main(int argc, char** argv)
 					fprintf(stderr, "Error\n");
 				}
 				sbgSleep(1);
+
+				if (no_activity > 1000){
+					error_exit = true;
+					break;
+				}
 			}
 
 			//
@@ -430,6 +451,9 @@ int main(int argc, char** argv)
 		fprintf(stderr, "ellipseMinimal: Unable to create the interface.\n");
 		retValue = -1;
 	}
+
+	if (error_exit)
+		exit(-1);
 
 	//
 	// Returns -1 if we have an error
