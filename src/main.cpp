@@ -124,6 +124,8 @@ void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag
 	_imu_pub.publish(imu);
 	_mag_pub.publish(mag);
 
+	ROS_INFO_THROTTLE(30, "IMU Publisher [OK]");
+
 	last_publish = stamp;
 }
 
@@ -132,6 +134,9 @@ long long received_ = 0;
 SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const SbgBinaryLogData *pLogData, void *pUserArg)
 {
 	received_++;
+
+	ros::Time system_time = ros::Time::now();
+
 	//
 	// Handle separately each received data according to the log ID
 	//
@@ -171,7 +176,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	{
 		printf("============FIRST IMU FRAME RECEIVED!================\n");
 
-		_ros_time_first_frame.fromSec(ros::WallTime::now().toSec());
+		_ros_time_first_frame = system_time; // fromSec(ros::WallTime::now().toSec());
 		_imu_time_first_frame = timestamp_ring;
 	}
 
@@ -192,8 +197,9 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	// getting the data timestamp in ros system
 	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000, (imu_time_duration%1000000)*1000);
 	
-	if( std::abs( ros_data_time.toSec() - ros::Time::now().toSec()) > 1 ){
-		ROS_WARN_STREAM("Time jump detected: now = " << ros::Time::now().toNSec() << " but sensor time = " << ros_data_time.toNSec() );
+	// Detect abnormal jitter in time
+	if( std::abs( ros_data_time.toSec() - system_time.toSec()) > 0.1 ){
+		ROS_WARN_STREAM("Time jump detected: now = " <<  system_time << " but sensor time = " << ros_data_time );
 		exit(-1); // abort
 	}
 
@@ -203,9 +209,18 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	static ros::Time last_imu = ros::Time(0);
 	static ros::Time last_quat = ros::Time(0);
 	static ros::Time last_mag = ros::Time(0);
+
+	// forward declaration outside switch
+	ros::Duration correction;
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
+
+		// update first frame time to avoid drifting away from real time
+		correction = (system_time - ros_data_time) * 0.01;
+		_ros_time_first_frame += correction;
+		ros_data_time += correction;
+		ROS_INFO_STREAM_THROTTLE(10,"Sensor time drift correction = " << correction);
 
 		if (!checkImuStatus(pLogData->imuData.status))
 			return SBG_NO_ERROR;
