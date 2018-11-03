@@ -52,7 +52,7 @@ bool checkGeneralStatus(uint16 generalStatus)
 		SBG_ECOM_GENERAL_TEMPERATURE_OK |
 		SBG_ECOM_GENERAL_DATALOGGER_OK )
 	)
-		std::cerr << "ERROR: General Status: " << std::bitset<16>(generalStatus) << std::endl;
+		ROS_WARN_STREAM("ERROR: General Status: " << std::bitset<16>(generalStatus));
 	else
 		return true;
 	
@@ -65,7 +65,7 @@ bool checkComStatus(uint16 comStatus)
 	)
 		return true;
 	else
-		std::cerr << "ERROR: Comm Status: " << std::bitset<16>(comStatus) << std::endl;
+		ROS_WARN_STREAM("ERROR: Comm Status: " << std::bitset<16>(comStatus));
 
 	return false;
 }
@@ -85,6 +85,11 @@ bool checkImuStatus(uint16 imuStatus)
 		SBG_ECOM_IMU_GYROS_IN_RANGE )
 	)
 	{
+		if ( (imuStatus & SBG_ECOM_IMU_ACCEL_X_BIT) || (imuStatus & SBG_ECOM_IMU_ACCEL_Y_BIT) || (imuStatus & SBG_ECOM_IMU_ACCEL_Z_BIT) )
+			ROS_WARN_STREAM_THROTTLE(0.25, "IMU ERROR: ACCEL SELF-TEST");
+		if ( (imuStatus & SBG_ECOM_IMU_GYRO_X_BIT) || (imuStatus & SBG_ECOM_IMU_GYRO_Y_BIT) || (imuStatus & SBG_ECOM_IMU_GYRO_Z_BIT) )
+			ROS_WARN_STREAM_THROTTLE(0.25, "IMU ERROR: GYRO SELF-TEST");
+		
 		ROS_WARN_STREAM_THROTTLE(0.25, "ERROR: IMU Status: " << std::bitset<16>(imuStatus) );
 		return false;
 	}
@@ -95,7 +100,31 @@ bool checkImuStatus(uint16 imuStatus)
 void checkEkfQuatData(uint32 ekfStatus)
 {
 	if ( ekfStatus )
-		std::cout << " EKF Status: "<< std::bitset<32>(ekfStatus) << std::endl;
+		ROS_INFO_STREAM( " EKF Status: "<< std::bitset<32>(ekfStatus));
+}
+
+void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag){
+	static ros::Time last_publish = ros::Time(0);
+
+	ros::Time stamp = imu.header.stamp;
+
+	if (imu.header.stamp != mag.header.stamp){
+		ROS_FATAL("Inconsistent IMU and Magnetometer timestamp");
+		exit(-1);
+	}
+
+	assert(stamp.toSec() > last_publish.toSec());
+
+	if (!last_publish.isZero()){
+		double lapse = (stamp - last_publish).toSec();
+		if (lapse > 0.1){ // greater than 0.1 second between messages
+			ROS_ERROR_STREAM("Big gap between IMU messages detected: " << std::fixed << std::showpoint << std::setprecision(2) << lapse );
+		}
+	}
+	_imu_pub.publish(imu);
+	_mag_pub.publish(mag);
+
+	last_publish = stamp;
 }
 
 long long received_ = 0;
@@ -163,11 +192,17 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	// getting the data timestamp in ros system
 	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000, (imu_time_duration%1000000)*1000);
 	
-	ROS_INFO_STREAM_THROTTLE(5, "IMU Time: " << imu_time_duration/1000000 + (imu_time_duration%1000000)*1000.0/1e9  << " sec");
+	if( std::abs( ros_data_time.toSec() - ros::Time::now().toSec()) > 1 ){
+		ROS_WARN_STREAM("Time jump detected: now = " << ros::Time::now().toNSec() << " but sensor time = " << ros_data_time.toNSec() );
+		exit(-1); // abort
+	}
+
+	ROS_INFO_STREAM_THROTTLE(60, "IMU Time: " << imu_time_duration/1000000 + (imu_time_duration%1000000)*1000.0/1e9  << " sec");
 
 	//printf("timestamp_ring: %d imu_time: %llu\n",timestamp_ring,imu_time);
 	static ros::Time last_imu = ros::Time(0);
 	static ros::Time last_quat = ros::Time(0);
+	static ros::Time last_mag = ros::Time(0);
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
@@ -196,16 +231,20 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 			_imu_msg.angular_velocity.z = pLogData->imuData.gyroscopes[2]; 
 		}
 
-		if (last_imu == last_quat)
-			_imu_pub.publish(_imu_msg);
+		if (last_imu == last_quat && last_imu == last_mag)
+			publish(_imu_msg,_mag_msg);
 		break;
 	case SBG_ECOM_LOG_MAG:
+		_imu_msg.header.stamp = ros_data_time;
+		last_mag = ros_data_time;
 		// checkMagStatus(pLogData->magData.status)
 		_mag_msg.header.stamp = ros_data_time;
 		_mag_msg.magnetic_field.x = pLogData->magData.magnetometers[0];
 		_mag_msg.magnetic_field.y = pLogData->magData.magnetometers[1];
 		_mag_msg.magnetic_field.z = pLogData->magData.magnetometers[2];
-		_mag_pub.publish(_mag_msg);
+		if (last_imu == last_quat && last_imu == last_mag)
+			publish(_imu_msg,_mag_msg);
+			
 		break;
 	case SBG_ECOM_LOG_EKF_QUAT:
 		_imu_msg.header.stamp = ros_data_time;
@@ -215,8 +254,8 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		_imu_msg.orientation.y = pLogData->ekfQuatData.quaternion[2];
 		_imu_msg.orientation.z = pLogData->ekfQuatData.quaternion[3];
 		checkEkfQuatData(pLogData->ekfQuatData.status);
-		if (last_imu == last_quat)
-			_imu_pub.publish(_imu_msg);
+		if (last_imu == last_quat && last_imu == last_mag)
+			publish(_imu_msg,_mag_msg);
 		break;
 	case SBG_ECOM_LOG_PRESSURE:
 		_alt_msg.header.stamp = ros_data_time;
@@ -228,7 +267,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		;
 		// std::cout << std::endl;
 		if ( checkGeneralStatus(pLogData->statusData.generalStatus) && checkComStatus(pLogData->statusData.comStatus) )
-			ROS_INFO_THROTTLE(10, "IMU Communication [OK]");
+			ROS_INFO_THROTTLE(30, "IMU Communication [OK]");
 		break;
 	default:
 		printf("data type:%d\n" , logCmd);
@@ -261,7 +300,7 @@ int main(int argc, char** argv)
     ros::NodeHandle local_nh("~");
 
 	local_nh.param("use_sculling_coning_results", _use_sculling_coning_results, false);
-	ROS_WARN_STREAM("Use Sculling & Coning Results: " << (_use_sculling_coning_results ? "True" : "False") );
+	ROS_WARN_STREAM("Use Sculling & Coning: " << (_use_sculling_coning_results ? "True" : "False") );
 
 	_imu_pub = nh.advertise<sensor_msgs::Imu>("imu0",100);
 	_mag_pub = nh.advertise<sensor_msgs::MagneticField>("mag0",100);
