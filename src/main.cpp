@@ -29,6 +29,8 @@ uint32 _imu_time_first_frame;
 
 bool _use_sculling_coning_results;
 
+double one_way_latency;
+
 //----------------------------------------------------------------------//
 //  Call backs                                                          //
 //----------------------------------------------------------------------//
@@ -131,6 +133,9 @@ void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag
 
 long long received_ = 0;
 
+// hm: Empirically, the clock in the Ellipse device is slower than the host machine. Therefore we can see the timestamp is lagging gradually
+// We may need to estimate the scale of this lag
+
 SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const SbgBinaryLogData *pLogData, void *pUserArg)
 {
 	received_++;
@@ -211,16 +216,24 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	static ros::Time last_mag = ros::Time(0);
 
 	// forward declaration outside switch
-	ros::Duration correction;
+	static ros::Duration correction = ros::Duration(0);
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
-
 		// update first frame time to avoid drifting away from real time
-		correction = (system_time - ros_data_time) * 0.01;
-		_ros_time_first_frame += correction;
-		ros_data_time += correction;
-		ROS_INFO_STREAM_THROTTLE(10,"Sensor time drift correction = " << correction);
+		// if (correction.isZero()){
+		// 	// assert(imu_time == 0);
+		// 	// ROS_INFO_STREAM("imu_time=" << imu_time << ", imu_time_duration=" << imu_time_duration);
+		// 	// ROS_INFO_STREAM("_imu_time_first_frame=" << _imu_time_first_frame << ", timestamp_ring=" << timestamp_ring);
+		// 	// ROS_INFO_STREAM("system_time=" << system_time << ", ros_data_time=" << ros_data_time);
+		// 	assert( (system_time - ros_data_time).isZero() );
+		// }
+		// apply the previous correction
+		// _ros_time_first_frame += correction;
+		// ros_data_time += correction;
+		// if there is still error modify correction estimate, using a simall low-pass
+		correction = (system_time - ros_data_time);
+		ROS_INFO_STREAM("Sensor time drift = " << correction.toSec()*1e6 << "us");
 
 		if (!checkImuStatus(pLogData->imuData.status))
 			return SBG_NO_ERROR;
@@ -429,6 +442,18 @@ int main(int argc, char** argv)
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_GPS1_POS.\n");
 			}
 			
+			///// LATENCY TEST /////////////
+			{
+				ROS_INFO("Latency test starts");
+				auto t1 = ros::Time::now();
+				for (int i = 0; i < 100 ; i++){
+					errorCode = sbgEComCmdGetInfo(&comHandle, &deviceInfo);
+				}
+				auto t2 = ros::Time::now();
+				one_way_latency = (t2 - t1).toSec() / 2 / 100;
+				ROS_INFO_STREAM("One-way latency estimate: " << one_way_latency*1000 << "ms");
+			}
+			////////////////////////////////
 
 			//
 			// Display a message for real time data display
@@ -443,7 +468,10 @@ int main(int argc, char** argv)
 			//
 			// Loop until the user exist
 			//
-			printf("ros spinning\n");
+
+			
+
+			ROS_INFO("SGB Com Handle loop starts");
 
 			long long last_received_ = 0;
 			int no_activity = 0;
