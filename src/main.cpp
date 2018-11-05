@@ -216,7 +216,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	static ros::Time last_mag = ros::Time(0);
 
 	// forward declaration outside switch
-	static ros::Duration correction = ros::Duration(0);
+	static double correction = 0;
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
@@ -232,8 +232,8 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		// _ros_time_first_frame += correction;
 		// ros_data_time += correction;
 		// if there is still error modify correction estimate, using a simall low-pass
-		correction = (system_time - ros_data_time);
-		ROS_INFO_STREAM("Sensor time drift = " << correction.toSec()*1e6 << "us");
+		// correction = system_time.toSec() - ros_data_time.toSec();
+		// ROS_INFO_STREAM("Sensor time drift = " << correction*1e6 << "us");
 
 		if (!checkImuStatus(pLogData->imuData.status))
 			return SBG_NO_ERROR;
