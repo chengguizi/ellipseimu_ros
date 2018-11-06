@@ -16,6 +16,9 @@
 #include <sensor_msgs/MagneticField.h>
 #include <sensor_msgs/FluidPressure.h>
 
+#include <fstream>
+#include <sstream>
+
 ros::Publisher _imu_pub;
 ros::Publisher _mag_pub;
 ros::Publisher _alt_pub;
@@ -131,6 +134,60 @@ void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag
 	last_publish = stamp;
 }
 
+std::ostringstream streamout;
+double min_duration = 1 , moving_avg_duration = 0, max_duration = 0;
+
+void observeJitter(const ros::Time &ros_data_time, const ros::Time &system_time){
+
+	static double avg_offset = 0;
+	static ros::Time last_system_time = ros::Time(0);
+
+	if (!last_system_time.isZero()){
+		double duration = (system_time - last_system_time).toSec();
+
+		if (min_duration > duration)
+			min_duration = duration;
+		if (max_duration < duration)
+			max_duration = duration;
+		if (moving_avg_duration == 0)
+			moving_avg_duration = duration;
+		
+		moving_avg_duration = moving_avg_duration*0.95 + duration*0.05;
+
+		ROS_INFO_STREAM_THROTTLE(30, "Jitter min_duration = " <<  std::fixed << std::setprecision(2) << min_duration*1000 
+			<< "ms, avg_duration=" << moving_avg_duration*1000 << "ms, max_duration=" << max_duration*1000 );
+
+	}
+
+	
+	double lag =(system_time-ros_data_time).toSec(); // host - device
+	//// Check timing difference between ros and the device
+	streamout << lag*1e3 << " " << ros_data_time << std::endl;
+
+	avg_offset = avg_offset*0.95 + lag*0.05;
+
+	
+	ROS_INFO_STREAM_THROTTLE(30, "Average Lag (host-device): " << std::fixed << std::setprecision(2) << avg_offset*1000 << "ms");
+
+	// Detect abnormal jitter in time
+	if( std::abs( ros_data_time.toSec() - system_time.toSec()) > 0.5 ){
+		ROS_WARN_STREAM("Time jump detected: now = " <<  system_time << " but sensor time = " << ros_data_time );
+		if (std::abs( ros_data_time.toSec() - system_time.toSec()) > 1)
+			exit(-1); // abort
+	}
+
+	last_system_time = system_time;
+}
+
+void fuzzyScaleCompensator(ros::Time &ros_data_time, const ros::Time &system_time,  ros::Time &ros_time_first_frame){
+
+	double offset = (system_time-ros_data_time).toSec();
+	if ( std::abs(offset) < 0.003 ){ // smaller than 3ms
+		ros_time_first_frame += (system_time - ros_data_time)*0.3;
+		ros_data_time += (system_time - ros_data_time)*0.3;
+	}
+}
+
 long long received_ = 0;
 
 // hm: Empirically, the clock in the Ellipse device is slower than the host machine. Therefore we can see the timestamp is lagging gradually
@@ -202,11 +259,14 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	// getting the data timestamp in ros system
 	auto ros_data_time = _ros_time_first_frame + ros::Duration(imu_time_duration/1000000, (imu_time_duration%1000000)*1000);
 	
-	// Detect abnormal jitter in time
-	if( std::abs( ros_data_time.toSec() - system_time.toSec()) > 0.1 ){
-		ROS_WARN_STREAM("Time jump detected: now = " <<  system_time << " but sensor time = " << ros_data_time );
-		exit(-1); // abort
+	///////// Observe Jitter and Fix Scale problem /////////////
+
+	if (logCmd == SBG_ECOM_LOG_IMU_DATA && _imu_time_first_frame != 0){
+		observeJitter(ros_data_time, system_time);
+		fuzzyScaleCompensator(ros_data_time, system_time, _ros_time_first_frame);
 	}
+
+	//////////////////////////////////////////
 
 	ROS_INFO_STREAM_THROTTLE(60, "IMU Time: " << imu_time_duration/1000000 + (imu_time_duration%1000000)*1000.0/1e9  << " sec");
 
@@ -220,20 +280,6 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
-		// update first frame time to avoid drifting away from real time
-		// if (correction.isZero()){
-		// 	// assert(imu_time == 0);
-		// 	// ROS_INFO_STREAM("imu_time=" << imu_time << ", imu_time_duration=" << imu_time_duration);
-		// 	// ROS_INFO_STREAM("_imu_time_first_frame=" << _imu_time_first_frame << ", timestamp_ring=" << timestamp_ring);
-		// 	// ROS_INFO_STREAM("system_time=" << system_time << ", ros_data_time=" << ros_data_time);
-		// 	assert( (system_time - ros_data_time).isZero() );
-		// }
-		// apply the previous correction
-		// _ros_time_first_frame += correction;
-		// ros_data_time += correction;
-		// if there is still error modify correction estimate, using a simall low-pass
-		// correction = system_time.toSec() - ros_data_time.toSec();
-		// ROS_INFO_STREAM("Sensor time drift = " << correction*1e6 << "us");
 
 		if (!checkImuStatus(pLogData->imuData.status))
 			return SBG_NO_ERROR;
@@ -263,7 +309,6 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 			publish(_imu_msg,_mag_msg);
 		break;
 	case SBG_ECOM_LOG_MAG:
-		_imu_msg.header.stamp = ros_data_time;
 		last_mag = ros_data_time;
 		// checkMagStatus(pLogData->magData.status)
 		_mag_msg.header.stamp = ros_data_time;
@@ -275,7 +320,7 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 			
 		break;
 	case SBG_ECOM_LOG_EKF_QUAT:
-		_imu_msg.header.stamp = ros_data_time;
+		// assert(_imu_msg.header.stamp == ros_data_time);
 		last_quat = ros_data_time;
 		_imu_msg.orientation.w = pLogData->ekfQuatData.quaternion[0];
 		_imu_msg.orientation.x = pLogData->ekfQuatData.quaternion[1];
@@ -292,7 +337,6 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 		break;
 	case SBG_ECOM_LOG_STATUS:
 		// printf("PPS Status Received: %u ", pLogData->statusData.timeStamp);
-		;
 		// std::cout << std::endl;
 		if ( checkGeneralStatus(pLogData->statusData.generalStatus) && checkComStatus(pLogData->statusData.comStatus) )
 			ROS_INFO_THROTTLE(30, "IMU Communication [OK]");
@@ -343,6 +387,8 @@ int main(int argc, char** argv)
 	std::string tty_port;
 	ROS_ASSERT(local_nh.getParam("tty_port", tty_port));
 	errorCode = sbgInterfaceSerialCreate(&sbgInterface, tty_port.c_str(), 921600);		// Example for Unix using a FTDI Usb2Uart converter
+	
+	ROS_INFO_STREAM("Connecting to " << tty_port);
 	//errorCode = sbgInterfaceSerialCreate(&sbgInterface, "COM20", 115200);						// Example for Windows serial communication
 
 	int imu_hz;
@@ -417,7 +463,7 @@ int main(int argc, char** argv)
 			}
 
 			// GENERAL STATUS
-			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_STATUS, SBG_ECOM_OUTPUT_MODE_DIV_10) != SBG_NO_ERROR)
+			if (sbgEComCmdOutputSetConf(&comHandle, SBG_ECOM_OUTPUT_PORT_A, SBG_ECOM_CLASS_LOG_ECOM_0, SBG_ECOM_LOG_STATUS, SBG_ECOM_OUTPUT_MODE_PPS) != SBG_NO_ERROR)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_STATUS.\n");
 			}
@@ -441,6 +487,19 @@ int main(int argc, char** argv)
 			{
 				fprintf(stderr, "ellipseMinimal: Unable to configure output log SBG_ECOM_LOG_GPS1_POS.\n");
 			}
+
+			///// Set Low Latency Flag ////////
+			{
+				int ret = std::system( ("setserial " + tty_port + " low_latency").c_str() );
+				if (ret != 0)
+				{
+					ROS_ERROR_STREAM("Set Low Latency Flag for " << tty_port << "Failed");
+					exit(-1);
+				}
+			}
+
+
+			///////////////////////////////////
 			
 			///// LATENCY TEST /////////////
 			{
@@ -450,9 +509,12 @@ int main(int argc, char** argv)
 					errorCode = sbgEComCmdGetInfo(&comHandle, &deviceInfo);
 				}
 				auto t2 = ros::Time::now();
-				one_way_latency = (t2 - t1).toSec() / 2 / 100;
-				ROS_INFO_STREAM("One-way latency estimate: " << one_way_latency*1000 << "ms");
+				one_way_latency = (t2 - t1).toSec() / 100;
+				ROS_INFO_STREAM("Round Trip latency estimate (525 Bytes): " << one_way_latency*1000 << "ms");
 			}
+
+			std::ofstream fout;
+    		fout.open("imu_driver_jitter.txt");
 			////////////////////////////////
 
 			//
@@ -508,6 +570,10 @@ int main(int argc, char** argv)
 			// Close the sbgEcom library
 			//
 			sbgEComClose(&comHandle);
+
+			std::cout << "Writing to file..." << std::endl;
+			fout << "jitter-in-millisecond-hosttime-minus-devicetime" << std::endl << streamout.str();
+			fout.close();
 		}
 		else
 		{

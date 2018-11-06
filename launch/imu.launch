@@ -1,5 +1,5 @@
 <launch>
-    <node pkg="ellipseimu_ros" type="ellipseimu_ros" name="imu" output="screen">
+    <node enable-coredumps="false" pkg="ellipseimu_ros" type="ellipseimu_ros" name="imu" output="screen">
         <param name="tty_port" type="str" value="/dev/serial_imu" />
         <param name="imu_hz" type="int" value="100" />
         <param name="use_sculling_coning_results" type="bool" value="false" />
