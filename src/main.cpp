@@ -57,7 +57,7 @@ bool checkGeneralStatus(uint16 generalStatus)
 		SBG_ECOM_GENERAL_TEMPERATURE_OK |
 		SBG_ECOM_GENERAL_DATALOGGER_OK )
 	)
-		ROS_WARN_STREAM("ERROR: General Status: " << std::bitset<16>(generalStatus));
+		ROS_WARN_STREAM_THROTTLE(0.25,"ERROR: General Status: " << std::bitset<16>(generalStatus));
 	else
 		return true;
 	
@@ -70,7 +70,7 @@ bool checkComStatus(uint16 comStatus)
 	)
 		return true;
 	else
-		ROS_WARN_STREAM("ERROR: Comm Status: " << std::bitset<16>(comStatus));
+		ROS_WARN_STREAM_THROTTLE(0.25,"ERROR: Comm Status: " << std::bitset<16>(comStatus));
 
 	return false;
 }
@@ -105,7 +105,7 @@ bool checkImuStatus(uint16 imuStatus)
 void checkEkfQuatData(uint32 ekfStatus)
 {
 	if ( ekfStatus )
-		ROS_INFO_STREAM( " EKF Status: "<< std::bitset<32>(ekfStatus));
+		ROS_INFO_STREAM_THROTTLE(0.25, " EKF Status: "<< std::bitset<32>(ekfStatus));
 }
 
 void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag){
@@ -115,7 +115,7 @@ void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag
 
 	if (imu.header.stamp != mag.header.stamp){
 		ROS_FATAL("Inconsistent IMU and Magnetometer timestamp");
-		exit(-1);
+		return;
 	}
 
 	assert(stamp.toSec() > last_publish.toSec());
@@ -123,7 +123,7 @@ void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag
 	if (!last_publish.isZero()){
 		double lapse = (stamp - last_publish).toSec();
 		if (lapse > 0.1){ // greater than 0.1 second between messages
-			ROS_ERROR_STREAM("Big gap between IMU messages detected: " << std::fixed << std::showpoint << std::setprecision(2) << lapse );
+			ROS_ERROR_STREAM_THROTTLE(1,"Big gap between IMU messages detected: " << std::fixed << std::showpoint << std::setprecision(2) << lapse );
 		}
 	}
 	_imu_pub.publish(imu);
@@ -154,7 +154,7 @@ void observeJitter(const ros::Time &ros_data_time, const ros::Time &system_time)
 		
 		moving_avg_duration = moving_avg_duration*0.95 + duration*0.05;
 
-		ROS_INFO_STREAM_THROTTLE(30, "Jitter min_duration = " <<  std::fixed << std::setprecision(2) << min_duration*1000 
+		ROS_INFO_STREAM_THROTTLE(15, "Jitter min_duration = " <<  std::fixed << std::setprecision(2) << min_duration*1000 
 			<< "ms, avg_duration=" << moving_avg_duration*1000 << "ms, max_duration=" << max_duration*1000 );
 
 	}
@@ -170,10 +170,10 @@ void observeJitter(const ros::Time &ros_data_time, const ros::Time &system_time)
 	ROS_INFO_STREAM_THROTTLE(30, "Average Lag (host-device): " << std::fixed << std::setprecision(2) << avg_offset*1000 << "ms");
 
 	// Detect abnormal jitter in time
-	if( std::abs( ros_data_time.toSec() - system_time.toSec()) > 0.5 ){
-		ROS_WARN_STREAM("Time jump detected: now = " <<  system_time << " but sensor time = " << ros_data_time );
-		if (std::abs( ros_data_time.toSec() - system_time.toSec()) > 1)
-			exit(-1); // abort
+	if( std::abs( ros_data_time.toSec() - system_time.toSec()) > 0.05 ){
+		ROS_WARN_STREAM_THROTTLE(1,"Time jump detected: now = " <<  system_time << " but sensor time = " << ros_data_time );
+		// if (std::abs( ros_data_time.toSec() - system_time.toSec()) > 1)
+		// 	exit(-1); // abort
 	}
 
 	last_system_time = system_time;
@@ -182,9 +182,20 @@ void observeJitter(const ros::Time &ros_data_time, const ros::Time &system_time)
 void fuzzyScaleCompensator(ros::Time &ros_data_time, const ros::Time &system_time,  ros::Time &ros_time_first_frame){
 
 	double offset = (system_time-ros_data_time).toSec();
-	if ( std::abs(offset) < 0.003 ){ // smaller than 3ms
-		ros_time_first_frame += (system_time - ros_data_time)*0.3;
-		ros_data_time += (system_time - ros_data_time)*0.3;
+	if ( std::abs(offset) < 0.005 && std::abs(offset) > 1e-4 ){ // smaller than 5ms, but greater than 0.1ms
+
+		if (offset > 0)
+			offset = std::max(offset*0.1,1e-5); // mimimum gives a 0.01ms correction
+		else
+			offset = std::min(offset*0.1,-1e-5);
+
+		auto offset_ros = ros::Duration(offset);
+		ros_time_first_frame += offset_ros;
+		ros_data_time += offset_ros;
+	}else if (std::abs(offset) >= 1 ){ // TIME JUMP DETECTED!
+		ROS_ERROR_STREAM_THROTTLE(1,"Detect Large Jitter Offset = "<< offset <<  ", Resetting Timestamp to Current System Time...");
+		ros_time_first_frame += (system_time-ros_data_time);
+		ros_data_time += (system_time-ros_data_time);
 	}
 }
 
@@ -262,8 +273,8 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	///////// Observe Jitter and Fix Scale problem /////////////
 
 	if (logCmd == SBG_ECOM_LOG_IMU_DATA && _imu_time_first_frame != 0){
-		observeJitter(ros_data_time, system_time);
 		fuzzyScaleCompensator(ros_data_time, system_time, _ros_time_first_frame);
+		observeJitter(ros_data_time, system_time);
 	}
 
 	//////////////////////////////////////////
