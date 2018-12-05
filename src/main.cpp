@@ -118,7 +118,10 @@ void publish (const sensor_msgs::Imu& imu, const sensor_msgs::MagneticField& mag
 		return;
 	}
 
-	assert(stamp.toSec() > last_publish.toSec());
+	if(stamp.toSec() <= last_publish.toSec()){
+		ROS_FATAL_STREAM("Non-Progressive Timestamp in Publiser: " << stamp << ", with previous: " << last_publish);
+		return;
+	}
 
 	if (!last_publish.isZero()){
 		double lapse = (stamp - last_publish).toSec();
@@ -154,7 +157,7 @@ void observeJitter(const ros::Time &ros_data_time, const ros::Time &system_time)
 		
 		moving_avg_duration = moving_avg_duration*0.95 + duration*0.05;
 
-		ROS_INFO_STREAM_THROTTLE(15, "Jitter min_duration = " <<  std::fixed << std::setprecision(2) << min_duration*1000 
+		ROS_INFO_STREAM_THROTTLE(30, "Jitter min_duration = " <<  std::fixed << std::setprecision(2) << min_duration*1000 
 			<< "ms, avg_duration=" << moving_avg_duration*1000 << "ms, max_duration=" << max_duration*1000 );
 
 	}
@@ -572,6 +575,7 @@ int main(int argc, char** argv)
 				sbgSleep(1);
 
 				if (no_activity > 1000){
+					fprintf(stderr, "No Activity from IMU sensor\n");
 					error_exit = true;
 					break;
 				}
