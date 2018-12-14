@@ -185,12 +185,12 @@ void observeJitter(const ros::Time &ros_data_time, const ros::Time &system_time)
 void fuzzyScaleCompensator(ros::Time &ros_data_time, const ros::Time &system_time,  ros::Time &ros_time_first_frame){
 
 	double offset = (system_time-ros_data_time).toSec();
-	if ( std::abs(offset) < 0.005 && std::abs(offset) > 1e-4 ){ // smaller than 5ms, but greater than 0.1ms
+	if ( std::abs(offset) < 1 && std::abs(offset) > 1e-4 ){ // smaller than 5ms, but greater than 0.1ms
 
 		if (offset > 0)
-			offset = std::max(offset*0.1,1e-5); // mimimum gives a 0.01ms correction
+			offset = std::max(offset*0.1,1.0e-5); // mimimum gives a 0.01ms correction
 		else
-			offset = std::min(offset*0.1,-1e-5);
+			offset = std::min(offset*0.1,-1.0e-5);
 
 		auto offset_ros = ros::Duration(offset);
 		ros_time_first_frame += offset_ros;
@@ -209,6 +209,12 @@ long long received_ = 0;
 
 SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const SbgBinaryLogData *pLogData, void *pUserArg)
 {
+
+	// Unused variables
+	(void)pHandle;
+	(void)pUserArg;
+
+
 	received_++;
 
 	ros::Time system_time = ros::Time::now();
@@ -290,7 +296,6 @@ SbgErrorCode onLogReceived(SbgEComHandle *pHandle, SbgEComCmdId logCmd, const Sb
 	static ros::Time last_mag = ros::Time(0);
 
 	// forward declaration outside switch
-	static double correction = 0;
 	switch (logCmd)
 	{
 	case SBG_ECOM_LOG_IMU_DATA:
